@@ -1,8 +1,8 @@
 # LVA-OS
 
-LVA-OS (Linux Voice Assistant Operating System) is a Linux-based operating system optimized to host voice assistants and their services.
+Lva-os (Linux Voice Assistant Operating System) is a Linux-based operating system optimized to host voice assistants and their services.
 
-LVA-OS uses Docker as its container engine. By default it deploys the LVA Supervisor as a container, which in turn manages the voice assistant core and supporting services in separate containers. LVA-OS is not based on a regular Linux distribution like Ubuntu. It is built using [Buildroot](https://buildroot.org/) and is purpose-built to run a voice assistant stack efficiently. It targets single-board computers (SBC) like the Raspberry Pi but also supports generic x86-64 and AArch64 systems.
+Lva-os(lva-os) uses Docker as its container engine. By default it deploys the LVA Supervisor as a container, which in turn manages the voice assistant core and supporting services in separate containers. Lva-os is not based on a regular Linux distribution like Ubuntu. It is built using [Buildroot](https://buildroot.org/) and is purpose-built to run a voice assistant stack efficiently. It targets single-board computers (SBC) like the Raspberry Pi but also supports generic x86-64 and AArch64 systems.
 
 ## Features
 
@@ -27,7 +27,7 @@ LVA-OS uses Docker as its container engine. By default it deploys the LVA Superv
 
 ## Getting Started
 
-Download the latest release image for your board from the [Releases](../../releases) page, flash it to your SD card or storage device, and boot. On first boot, LVA-OS will pull the required containers and set up the system automatically. Progress is visible on port `8080` during this process.
+Download the latest release image for your board from the [Releases](../../releases) page, flash it to your SD card or storage device, and boot. On first boot, lva-os will pull the required containers and set up the system automatically. Progress is visible on port `8080` during this process.
 
 Once setup is complete, the LVA Portal is accessible on port `8000`.
 
@@ -44,4 +44,4 @@ Once setup is complete, the LVA Portal is accessible on port `8000`.
 
 ## OTA Updates
 
-LVA-OS uses RAUC with an A/B partition scheme for reliable over-the-air updates. Updates are delivered as versioned bundles via a central manifest and can be applied through the LVA Portal. The inactive partition is always updated first, so your system remains fully functional if anything goes.
+LVA-OS uses RAUC with an A/B partition scheme for reliable over-the-air updates. Updates are delivered as versioned bundles via a central manifest and can be applied through the LVA Portal. The inactive partition is always updated first, so your system remains fully functional if anything goes wrong.
