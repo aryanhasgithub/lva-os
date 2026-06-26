@@ -1,0 +1,9 @@
+[Unit]
+Description=lva-os swap file
+ConditionFileNotEmpty=/mnt/data/swapfile
+
+[Swap]
+What=/mnt/data/swapfile
+
+[Install]
+WantedBy=swap.target

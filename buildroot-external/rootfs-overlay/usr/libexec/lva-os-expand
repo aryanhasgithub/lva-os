@@ -1,0 +1,70 @@
+#!/bin/sh
+# ==============================================================================
+# LVA OS Partition Expander
+# ==============================================================================
+set -e
+
+# Target label matching your genimage.cfg partition tree block
+TARGET_LABEL="lvaos-data"
+
+DEVICE_CHILD="$(findfs LABEL="${TARGET_LABEL}")"
+DEVICE_CHILD_NAME="$(basename "${DEVICE_CHILD}")"
+DEVICE_ROOT_NAME="$(lsblk -no pkname "${DEVICE_CHILD}")"
+DEVICE_ROOT="/dev/${DEVICE_ROOT_NAME}"
+PART_NUM="$(cat "/sys/class/block/${DEVICE_CHILD_NAME}/partition")"
+
+# Get partition label type
+PART_TABLE="$(sfdisk -lqJ "${DEVICE_ROOT}")"
+PART_LABEL="$(echo "${PART_TABLE}" | jq -r '.partitiontable.label')"
+echo "[INFO] Checking if expanding data partition on ${DEVICE_CHILD} is necessary"
+
+if [ "${PART_LABEL}" = "gpt" ]; then
+    echo "[INFO] Detected GPT partition label on ${DEVICE_ROOT}"
+
+    # Critical for your GPT layout: Fixes the backup table placement when flashed onto larger SD cards
+    if sfdisk --verify "${DEVICE_ROOT}" 2>&1 | grep "The backup GPT table is not on the end of the device."; then
+        echo "[INFO] Moving GPT backup header to the absolute end of the physical disk"
+        sfdisk --relocate gpt-bak-std "${DEVICE_ROOT}"
+
+        # Reload partition label to accurately grab the updated .partitiontable.lastlba
+        PART_TABLE="$(sfdisk -lqJ "${DEVICE_ROOT}")"
+    fi
+    LAST_USABLE_LBA="$(echo "${PART_TABLE}" | jq -r '.partitiontable.lastlba')"
+else
+    echo "[INFO] Detected MBR partition label on ${DEVICE_ROOT}"
+
+    # Fallback calculation if utilizing an MBR container schema
+    DEVICE_SIZE=$(blockdev --getsize64 "${DEVICE_ROOT}")
+    LAST_USABLE_LBA=$(echo "${PART_TABLE}" | jq -r "${DEVICE_SIZE} / .partitiontable.sectorsize")
+fi
+echo "[INFO] Last usable logical block ${LAST_USABLE_LBA}"
+
+# Calculate end of your custom data partition
+JQ_FILTER=".partitiontable.partitions[] | select ( .node == \"${DEVICE_CHILD}\" ) | .start + .size"
+DATA_PARTITION_END="$(echo "${PART_TABLE}" | jq "${JQ_FILTER}")"
+echo "[INFO] LVA Data partition end block ${DATA_PARTITION_END}"
+
+# Need resize? Ignore free space if it is less than 8MB/64MB (16384 sectors at 512b)
+# to completely prevent rounding loop overflows or partition alignment drift.
+UNUSED_BLOCKS=$(( LAST_USABLE_LBA - DATA_PARTITION_END ))
+if [ "${UNUSED_BLOCKS}" -le "16384" ]; then
+    echo "[INFO] No resize of data partition needed"
+    exit 0
+fi
+
+echo "[INFO] Updating ${TARGET_LABEL} partition on position ${PART_NUM}"
+echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${PART_NUM}" "${DEVICE_ROOT}"
+sfdisk -V "${DEVICE_ROOT}"
+
+# Atomically update the active kernel's partition structure mapping
+partx -u "${DEVICE_ROOT}"
+udevadm settle
+
+# Eliminates the race condition with systemd mnt-data.mount blocks by verifying
+# that the hardware disk node state registers completely active before letting the script exit
+if ! systemctl start "dev-disk-by\\x2dlabel-lvaos\\x2ddata.device"; then
+    echo "[ERROR] LVA Data partition device node not found!"
+    exit 1
+fi
+
+echo "[INFO] Finished lvaos-data partition resizing successfully"

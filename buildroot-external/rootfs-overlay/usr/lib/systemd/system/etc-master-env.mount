@@ -1,0 +1,14 @@
+[Unit]
+Description=LVA master.env persistent configuration
+Requires=mnt-data.mount lva-os-master-env.service
+After=mnt-data.mount lva-os-master-env.service
+Before=lva-os-supervisor.service
+
+[Mount]
+What=/mnt/data/master.env
+Where=/etc/lva/master.env
+Type=none
+Options=bind
+
+[Install]
+WantedBy=lva-os-bind.target

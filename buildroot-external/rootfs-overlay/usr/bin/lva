@@ -1,0 +1,11 @@
+#!/bin/sh
+# ==============================================================================
+# LVA utility
+# ==============================================================================
+
+if [ -t 1 ]; then
+	# stdout (fd 1) must be terminal, otherwise `-t` causes error
+	docker exec -it lva-cli lva "$@"
+else
+	docker exec -i lva-cli lva "$@"
+fi

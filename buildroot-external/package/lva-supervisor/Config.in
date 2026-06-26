@@ -1,0 +1,12 @@
+config BR2_PACKAGE_LVA_SUPERVISOR
+	bool "LVA Supervisor"
+	help
+	  LVA-OS supervisor service.
+	  https://github.com/aryanhasgithub/lva-supervisor
+
+config BR2_PACKAGE_LVA_OS_MACHINE
+	string "LVA-OS Machine"
+	depends on BR2_PACKAGE_LVA_SUPERVISOR
+	help
+	  Machine identifier used for RAUC OTA bundle selection
+	  and supervisor container routing.
