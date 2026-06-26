@@ -5,21 +5,23 @@ if [ -z "$1" ]; then
     echo "Need a commit ID!"
     exit 1
 fi
+echo "Use firmware: https://github.com/raspberrypi/firmware/archive/$1.tar.gz"
 
-if [ -z "$2" ]; then
-    echo "Need a kernel version!"
+if [ -z "$2" ] || ! [ -f "$2" ]; then
+    echo "Need buildroot patch file!"
     exit 1
 fi
 
-defconfigs=(buildroot-external/configs/{rpi*,yellow}_defconfig)
-sed -i "s|BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=\"https://github.com/raspberrypi/linux/.*\"|BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=\"https://github.com/raspberrypi/linux/archive/$1.tar.gz\"|g" "${defconfigs[@]}"
-sed -i "s/| \(Raspberry Pi.*\|Home Assistant Yellow\) | .* |/| \1 | $2 |/g" Documentation/kernel.md
-git commit -m "RaspberryPi: Update kernel to $2 - $1" "${defconfigs[@]}" Documentation/kernel.md
+patch -Rf -d buildroot -p 1 < "$2"
 
-./scripts/check-kernel-patches.sh
+rm -rf /tmp/rpi-firmware.tar.gz
+curl -Lo /tmp/rpi-firmware.tar.gz "https://github.com/raspberrypi/firmware/archive/$1.tar.gz"
+checksum="$(sha256sum /tmp/rpi-firmware.tar.gz | cut -d' ' -f 1)"
+rm -rf /tmp/rpi-firmware.tar.gz
 
-echo
-echo "WARNING: bumping RPi kernel usually requires bump of rpi-firmware"
-echo "package to version from the corresponding branch in raspberrypi/firmware"
-echo "repository (which is usually the stable branch), namely because the DT"
-echo "overlays are copied from this repository"
+
+sed -i "s/+RPI_FIRMWARE_VERSION = [a-f0-9]*/+RPI_FIRMWARE_VERSION = $1/g" "$2"
+sed -i "s/+sha256\s*[a-f0-9]*\s*rpi-firmware-[a-f0-9]*.tar.gz/+sha256  $checksum  rpi-firmware-$1.tar.gz/g" "$2"
+
+patch -d buildroot -p 1 < "$2"
+git commit -m "RaspberryPi: Update firmware $1" "$2" buildroot/package/rpi-firmware

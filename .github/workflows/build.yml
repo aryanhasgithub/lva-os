@@ -1,0 +1,453 @@
+# LVA-OS build workflow
+# Artifacts released at:
+#   https://github.com/aryanhasgithub/lva-os/releases/download/{version}/lva-os_{board}-{version}.img.xz
+#   https://github.com/aryanhasgithub/lva-os/releases/download/{version}/lva-os_{board}-{version}.raucb
+
+name: OS build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      boards:
+        description: 'List of boards to build (comma separated identifiers)'
+        required: false
+        type: string
+      publish:
+        description: 'Publish build artifacts to GitHub Release'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PREPARE
+# ─────────────────────────────────────────────────────────────────────────────
+  prepare:
+    name: Prepare build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version_dev:         ${{ steps.version_dev.outputs.version_dev }}
+      version_main:        ${{ steps.version.outputs.version_main }}
+      version_full:        ${{ steps.version.outputs.version_full }}
+      channel:             ${{ steps.channel.outputs.channel }}
+      matrix:              ${{ steps.generate_matrix.outputs.result }}
+      build_container_image: ghcr.io/${{ github.repository_owner }}/lva-os-builder@${{ steps.build_builder.outputs.digest }}
+      publish_build:       ${{ steps.check_publish.outputs.publish_build }}
+      self_signed_cert:    ${{ steps.generate_signing_key.outputs.self_signed_cert }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ── Publish decision ───────────────────────────────────────────────────
+      - name: Check if build should be published
+        id: check_publish
+        env:
+          PUBLISH_FLAG: ${{ inputs.publish }}
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]] || \
+             [[ "${PUBLISH_FLAG}" == "true" ]]; then
+            echo "publish_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Dev version suffix ─────────────────────────────────────────────────
+      # meta has no VERSION_SUFFIX line — we append one for non-release builds.
+      # Matches HA pattern: dev<date> for published dev builds, dev<epoch> otherwise.
+      - name: Generate development version
+        id: version_dev
+        if: github.event_name != 'release'
+        env:
+          PUBLISH_BUILD: ${{ steps.check_publish.outputs.publish_build }}
+        run: |
+          version_dev="dev$(date --utc +'%Y%m%d')"
+          if [[ "${PUBLISH_BUILD}" != "true" ]] || \
+             [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            version_dev="dev$(date +%s)"
+          fi
+          echo "Development version \"${version_dev}\""
+          echo "version_dev=${version_dev}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version suffix in meta
+        if: github.event_name != 'release'
+        env:
+          VERSION_DEV: ${{ steps.version_dev.outputs.version_dev }}
+        run: |
+          # meta has no VERSION_SUFFIX line — append it
+          if grep -q '^VERSION_SUFFIX=' buildroot-external/meta; then
+            sed -i -E "s/(^VERSION_SUFFIX=\").*(\"$)/\1${VERSION_DEV}\2/" \
+              buildroot-external/meta
+          else
+            printf '\nVERSION_SUFFIX="%s"\n' "${VERSION_DEV}" \
+              >> buildroot-external/meta
+          fi
+
+      # ── Version ────────────────────────────────────────────────────────────
+      - name: Get version
+        id: version
+        run: |
+          . "${GITHUB_WORKSPACE}/buildroot-external/meta"
+          echo "version_main=${VERSION_MAJOR}.${VERSION_MINOR}" >> "$GITHUB_OUTPUT"
+          if [ -z "${VERSION_SUFFIX:-}" ]; then
+            version_full="${VERSION_MAJOR}.${VERSION_MINOR}"
+          else
+            version_full="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_SUFFIX}"
+          fi
+          echo "version_full=${version_full}" >> "$GITHUB_OUTPUT"
+          echo "Full version: ${version_full}"
+
+      - name: Validate version against release tag
+        if: github.event_name == 'release'
+        run: |
+          if [ "${{ steps.version.outputs.version_full }}" \
+               != "${{ github.event.release.tag_name }}" ]; then
+            echo "::error::Version in meta (${{ steps.version.outputs.version_full }}) \
+              does not match release tag (${{ github.event.release.tag_name }})"
+            exit 1
+          fi
+
+      # ── Channel ────────────────────────────────────────────────────────────
+      - name: Get channel
+        id: channel
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            if [[ "${{ github.event.release.prerelease }}" == "true" ]]; then
+              echo "channel=beta" >> "$GITHUB_OUTPUT"
+            else
+              echo "channel=stable" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Board matrix ───────────────────────────────────────────────────────
+      - name: Create build matrix
+        id: generate_matrix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const boards = [
+              { id: "generic-x86-64",  defconfig: "generic_x86_64"  },
+              { id: "generic-aarch64", defconfig: "generic_aarch64"  },
+              { id: "rpi3-64",         defconfig: "rpi-3_64"         },
+              { id: "rpi4-64",         defconfig: "rpi-4_64"         },
+              { id: "rpi5-64",         defconfig: "rpi-5_64"         },
+              { id: "rpi0-2w",         defconfig: "rpi-zero-2w"      },
+            ]
+
+            if ("${{ github.event_name }}" === "release") {
+              return { board: boards }
+            }
+
+            const boardFilter = "${{ inputs.boards }}".trim()
+            if (boardFilter === "") {
+              console.log("No filter — building all boards")
+              return { board: boards }
+            }
+
+            const wanted = new Set(boardFilter.split(",").map(s => s.trim()))
+            const subset = boards.filter(b => wanted.has(b.id))
+            if (subset.length === 0) {
+              core.setFailed(`No valid boards matched: ${boardFilter}`)
+            }
+            return { board: subset }
+
+      # ── Builder container image ────────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push builder image
+        id: build_builder
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          tags: ghcr.io/${{ github.repository_owner }}/lva-os-builder
+          # Cache keyed on version_main — stays warm across builds in the
+          # same release family without cross-polluting different OS versions.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/lva-os-builder:cache-${{ steps.version.outputs.version_main }}
+          cache-to:   type=registry,ref=ghcr.io/${{ github.repository_owner }}/lva-os-builder:cache-${{ steps.version.outputs.version_main }},mode=max
+          push: true
+
+      # ── RAUC signing certificate ───────────────────────────────────────────
+      - name: Generate self-signed certificate
+        id: generate_signing_key
+        env:
+          RAUC_CERTIFICATE: ${{ secrets.RAUC_CERTIFICATE }}
+          RAUC_PRIVATE_KEY:  ${{ secrets.RAUC_PRIVATE_KEY }}
+        if: env.RAUC_CERTIFICATE == '' || env.RAUC_PRIVATE_KEY == ''
+        run: |
+          echo "::warning::RAUC_CERTIFICATE / RAUC_PRIVATE_KEY not set — \
+            building with a self-signed development certificate."
+          bash buildroot-external/scripts/generate-signing-key.sh cert.pem key.pem
+          echo "self_signed_cert=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signing key artifact
+        if: steps.generate_signing_key.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-key
+          path: |
+            cert.pem
+            key.pem
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILD  (parallel across all boards)
+# ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build for ${{ matrix.board.id }}
+    needs: prepare
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: ${{ github.event_name == 'release' }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      # Re-inject version suffix — each build job gets a fresh checkout
+      - name: Set version suffix in meta
+        if: github.event_name != 'release'
+        env:
+          VERSION_DEV: ${{ needs.prepare.outputs.version_dev }}
+        run: |
+          if grep -q '^VERSION_SUFFIX=' buildroot-external/meta; then
+            sed -i -E "s/(^VERSION_SUFFIX=\").*(\"$)/\1${VERSION_DEV}\2/" \
+              buildroot-external/meta
+          else
+            printf '\nVERSION_SUFFIX="%s"\n' "${VERSION_DEV}" \
+              >> buildroot-external/meta
+          fi
+
+      # ── RAUC certs ────────────────────────────────────────────────────────
+      - name: Add release PKI certs
+        if: needs.prepare.outputs.self_signed_cert != 'true'
+        env:
+          RAUC_CERTIFICATE: ${{ secrets.RAUC_CERTIFICATE }}
+          RAUC_PRIVATE_KEY:  ${{ secrets.RAUC_PRIVATE_KEY }}
+        run: |
+          printf -- "-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" \
+            "${RAUC_CERTIFICATE}" > cert.pem
+          printf -- "-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\n" \
+            "${RAUC_PRIVATE_KEY}" > key.pem
+
+      - name: Get self-signed certificate from prepare job
+        if: needs.prepare.outputs.self_signed_cert == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: signing-key
+
+      # ── Disk space ────────────────────────────────────────────────────────
+      - name: Free space on build drive
+        run: |
+          df -h
+          sudo rm -rf \
+            /usr/local/lib/android/sdk/ndk \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/share/dotnet \
+            /usr/local/share/boost
+          sudo mkdir -p /mnt/cache /mnt/output
+          WORKSPACE_OWNER="$(stat -c '%U:%G' "${GITHUB_WORKSPACE}")"
+          sudo ln -sf /mnt/output "${GITHUB_WORKSPACE}/output"
+          sudo chown -R "${WORKSPACE_OWNER}" /mnt/cache /mnt/output
+          df -h
+
+      # ── ccache ────────────────────────────────────────────────────────────
+      # Restore key is just the board prefix so any prior run's cache is used.
+      # Save key includes run_id so each run creates a fresh entry without
+      # overwriting — matching HA's exact pattern.
+      - name: "Restore cache: object files"
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/cache/cc
+          key: lva-os-cc-${{ matrix.board.id }}-${{ github.run_id }}
+          restore-keys: |
+            lva-os-cc-${{ matrix.board.id }}-
+
+      # ── dl/ source tarball cache ───────────────────────────────────────────
+      # One shared cache for all boards keyed on version_main — dl/ is
+      # architecture-independent so sharing is safe and saves storage quota.
+      - name: "Restore cache: source tarballs"
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/cache/dl
+          key: lva-os-dl-${{ needs.prepare.outputs.version_main }}
+          restore-keys: |
+            lva-os-dl-
+
+      # ── Log in to GHCR (pull builder image) ───────────────────────────────
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Configure ─────────────────────────────────────────────────────────
+      - name: Generate build config
+        uses: "./.github/actions/lva-os-builder-command"
+        with:
+          image: ${{ needs.prepare.outputs.build_container_image }}
+          command: make ${{ matrix.board.defconfig }}_defconfig
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build
+        uses: "./.github/actions/lva-os-builder-command"
+        with:
+          image: ${{ needs.prepare.outputs.build_container_image }}
+          command: make
+
+      # ── Cache saves ────────────────────────────────────────────────────────
+      - name: Print cache stats
+        run: |
+          echo "Cache size: $(du -sh /mnt/cache/cc 2>/dev/null || echo '0')"
+          echo "Files total: $(find /mnt/cache/cc -mindepth 1 -type f 2>/dev/null | wc -l)"
+          echo "Stale files: $(find /mnt/cache/cc -mindepth 1 -type f \
+            -not -anewer /mnt/output/Makefile 2>/dev/null | wc -l)"
+          find /mnt/cache/cc -mindepth 1 -type f \
+            -not -anewer /mnt/output/Makefile -delete 2>/dev/null || true
+          echo "Cache size after pruning: $(du -sh /mnt/cache/cc 2>/dev/null || echo '0')"
+
+      - name: "Save cache: object files"
+        if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/cache/cc
+          key: lva-os-cc-${{ matrix.board.id }}-${{ github.run_id }}
+
+      - name: "Save cache: source tarballs"
+        if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/cache/dl
+          key: lva-os-dl-${{ needs.prepare.outputs.version_main }}
+
+      # ── Upload to GitHub Release ───────────────────────────────────────────
+      - name: Upload img.xz release asset
+        if: needs.prepare.outputs.publish_build == 'true' && github.event_name == 'release'
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: output/images/lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
+
+      - name: Upload raucb release asset
+        if: needs.prepare.outputs.publish_build == 'true' && github.event_name == 'release'
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: output/images/lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
+
+      # ── Upload as workflow artifacts (non-release / manual dispatch) ───────
+      - name: Upload img.xz artifact
+        if: needs.prepare.outputs.publish_build != 'true' || github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
+          path: output/images/lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.img.xz
+          retention-days: 7
+
+      - name: Upload raucb artifact
+        if: needs.prepare.outputs.publish_build != 'true' || github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
+          path: output/images/lva-os_${{ matrix.board.id }}-${{ needs.prepare.outputs.version_full }}.raucb
+          retention-days: 7
+
+      # ── Build summary ──────────────────────────────────────────────────────
+      - name: Generate build summary
+        run: |
+          {
+            echo "# ${{ matrix.board.id }} — ${{ needs.prepare.outputs.version_full }}"
+            echo ""
+            echo "**Channel:** ${{ needs.prepare.outputs.channel }}"
+            echo ""
+            echo "## Container versions"
+            echo "| Container | Version |"
+            echo "|:----------|:--------|"
+            . buildroot-external/meta
+            echo "| lva-supervisor | ${LVA_SUPERVISOR_CONTAINER_VERSION} |"
+            echo "| lva-cli        | ${LVA_CLI_CONTAINER_VERSION} |"
+            echo "| lva-audio      | ${LVA_AUDIO_CONTAINER_VERSION} |"
+            echo ""
+            echo "## Artifacts"
+            echo "| File | Size |"
+            echo "|:-----|-----:|"
+            for f in output/images/lva-os_${{ matrix.board.id }}-*; do
+              [ -f "$f" ] && echo "| $(basename "$f") | $(du -bh "$f" | cut -f1) |"
+            done
+            echo ""
+            echo "## Partitions"
+            echo "| File | Size |"
+            echo "|:-----|-----:|"
+            for f in boot.vfat kernel.img rootfs.erofs overlay.ext4 data.ext4; do
+              p="output/images/${f}"
+              [ -f "$p" ] && echo "| ${f} | $(du -bh "$p" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE stable.json (stable releases only)
+# Bumps the os version in aryanhasgithub/lva-version so the supervisor's
+# OTA updater picks up the new OS release.
+# Requires: LVA_VERSION_PAT secret with write access to lva-version repo.
+# ─────────────────────────────────────────────────────────────────────────────
+  update_stable_version:
+    name: Bump stable channel version
+    needs: [prepare, build]
+    if: |
+      github.event_name == 'release' &&
+      needs.prepare.outputs.channel == 'stable'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout lva-version
+        uses: actions/checkout@v4
+        with:
+          repository: aryanhasgithub/lva-version
+          token: ${{ secrets.LVA_VERSION_PAT }}
+          path: lva-version
+
+      - name: Update stable.json
+        run: |
+          cd lva-version
+          python3 - <<'EOF'
+          import json, pathlib
+          p = pathlib.Path("stable.json")
+          data = json.loads(p.read_text())
+          data["os"] = "${{ needs.prepare.outputs.version_full }}"
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          print("Updated stable.json:", data)
+          EOF
+
+      - name: Commit and push
+        run: |
+          cd lva-version
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stable.json
+          git commit -m "os: bump to ${{ needs.prepare.outputs.version_full }}"
+          git push

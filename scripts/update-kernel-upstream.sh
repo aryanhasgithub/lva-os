@@ -6,8 +6,8 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-# assume the version is same in all defconfigs, take ova as the reference
-current_version=$(grep 'BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE' buildroot-external/configs/ova_defconfig | cut -d '"' -f 2)
+# assume the version is same in all defconfigs, take x86 as the reference
+current_version=$(grep 'BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE' buildroot-external/configs/generic_x86_64_defconfig | cut -d '"' -f 2)
 
 # get X.Y.Z tokens of the current and new version
 IFS='.' read -r -a current_version_parts <<< "$current_version"
@@ -16,7 +16,7 @@ IFS='.' read -r -a new_version_parts <<< "$1"
 
 defconfigs=(buildroot-external/configs/{generic_aarch64,generic_x86_64}_defconfig)
 sed -i "s/BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE=\".*\"/BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE=\"$1\"/g" "${defconfigs[@]}"
-sed -i "s/| \Generic aarch64\|Generic x86-64\) | .* |/| \1 | $1 |/g" Documentation/kernel.md
+sed -i "s/| \(Generic aarch64\|Generic x86-64\) | .* |/| \1 | $1 |/g" Documentation/kernel.md
 
 commit_message="Linux: Update kernel to $1"
 
