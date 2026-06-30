@@ -1,0 +1,13 @@
+[Unit]
+Description=lva-os Configuration Manager
+After=lva-os-bind.target NetworkManager.service
+Requires=NetworkManager.service
+Before=lva-os-supervisor.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/lva-os-config
+
+[Install]
+WantedBy=multi-user.target
