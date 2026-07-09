@@ -44,6 +44,10 @@ JQ_FILTER=".partitiontable.partitions[] | select ( .node == \"${DEVICE_CHILD}\" 
 DATA_PARTITION_END="$(echo "${PART_TABLE}" | jq "${JQ_FILTER}")"
 echo "[INFO] LVA Data partition end block ${DATA_PARTITION_END}"
 
+# Reserve ~100MB of unallocated space at the end of the disk
+# (100 * 1024 * 1024 / 512 = 204800 sectors at 512b sector size)
+RESERVE_SECTORS=204800
+
 # Need resize? Ignore free space if it is less than 8MB/64MB (16384 sectors at 512b)
 # to completely prevent rounding loop overflows or partition alignment drift.
 UNUSED_BLOCKS=$(( LAST_USABLE_LBA - DATA_PARTITION_END ))
@@ -52,8 +56,20 @@ if [ "${UNUSED_BLOCKS}" -le "16384" ]; then
     exit 0
 fi
 
+# Get current start sector of the target partition so we can compute an explicit new size
+JQ_START_FILTER=".partitiontable.partitions[] | select ( .node == \"${DEVICE_CHILD}\" ) | .start"
+DATA_PARTITION_START="$(echo "${PART_TABLE}" | jq "${JQ_START_FILTER}")"
+
+NEW_SIZE=$(( LAST_USABLE_LBA - DATA_PARTITION_START - RESERVE_SECTORS ))
+
+if [ "${NEW_SIZE}" -le "0" ]; then
+    echo "[INFO] Not enough free space to grow after reserving buffer"
+    exit 0
+fi
+
 echo "[INFO] Updating ${TARGET_LABEL} partition on position ${PART_NUM}"
-echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${PART_NUM}" "${DEVICE_ROOT}"
+echo "[INFO] New size for ${TARGET_LABEL}: ${NEW_SIZE} sectors (reserving ${RESERVE_SECTORS} sectors / ~100MB)"
+echo ",${NEW_SIZE}" | sfdisk --no-reread --no-tell-kernel -N "${PART_NUM}" "${DEVICE_ROOT}"
 sfdisk -V "${DEVICE_ROOT}"
 
 # Atomically update the active kernel's partition structure mapping
