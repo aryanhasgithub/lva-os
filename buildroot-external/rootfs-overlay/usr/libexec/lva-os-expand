@@ -6,6 +6,7 @@ set -e
 
 # Target label matching your genimage.cfg partition tree block
 TARGET_LABEL="lvaos-data"
+CONFIG_LABEL="CONFIG"
 
 DEVICE_CHILD="$(findfs LABEL="${TARGET_LABEL}")"
 DEVICE_CHILD_NAME="$(basename "${DEVICE_CHILD}")"
@@ -44,13 +45,27 @@ JQ_FILTER=".partitiontable.partitions[] | select ( .node == \"${DEVICE_CHILD}\" 
 DATA_PARTITION_END="$(echo "${PART_TABLE}" | jq "${JQ_FILTER}")"
 echo "[INFO] LVA Data partition end block ${DATA_PARTITION_END}"
 
-# Reserve ~100MB of unallocated space at the end of the disk
+# The CONFIG partition (written by lva-installer) is anchored to the end of
+# the disk, after lvaos-data. If present, lvaos-data must not be grown past
+# it. Fall back to LAST_USABLE_LBA if CONFIG doesn't exist (e.g. dev image
+# flashed without the installer's CONFIG step).
+JQ_CONFIG_FILTER=".partitiontable.partitions[] | select ( .name == \"${CONFIG_LABEL}\" ) | .start"
+CONFIG_START="$(echo "${PART_TABLE}" | jq -r "${JQ_CONFIG_FILTER}")"
+
+if [ -n "${CONFIG_START}" ] && [ "${CONFIG_START}" != "null" ]; then
+    echo "[INFO] Detected ${CONFIG_LABEL} partition at block ${CONFIG_START} — capping growth ceiling there"
+    GROWTH_CEILING=$(( CONFIG_START - 1 ))
+else
+    GROWTH_CEILING="${LAST_USABLE_LBA}"
+fi
+
+# Reserve ~100MB of unallocated space between lvaos-data and the growth ceiling
 # (100 * 1024 * 1024 / 512 = 204800 sectors at 512b sector size)
 RESERVE_SECTORS=204800
 
 # Need resize? Ignore free space if it is less than 8MB/64MB (16384 sectors at 512b)
 # to completely prevent rounding loop overflows or partition alignment drift.
-UNUSED_BLOCKS=$(( LAST_USABLE_LBA - DATA_PARTITION_END ))
+UNUSED_BLOCKS=$(( GROWTH_CEILING - DATA_PARTITION_END ))
 if [ "${UNUSED_BLOCKS}" -le "16384" ]; then
     echo "[INFO] No resize of data partition needed"
     exit 0
@@ -60,7 +75,7 @@ fi
 JQ_START_FILTER=".partitiontable.partitions[] | select ( .node == \"${DEVICE_CHILD}\" ) | .start"
 DATA_PARTITION_START="$(echo "${PART_TABLE}" | jq "${JQ_START_FILTER}")"
 
-NEW_SIZE=$(( LAST_USABLE_LBA - DATA_PARTITION_START - RESERVE_SECTORS ))
+NEW_SIZE=$(( GROWTH_CEILING - DATA_PARTITION_START - RESERVE_SECTORS ))
 
 if [ "${NEW_SIZE}" -le "0" ]; then
     echo "[INFO] Not enough free space to grow after reserving buffer"
@@ -68,7 +83,7 @@ if [ "${NEW_SIZE}" -le "0" ]; then
 fi
 
 echo "[INFO] Updating ${TARGET_LABEL} partition on position ${PART_NUM}"
-echo "[INFO] New size for ${TARGET_LABEL}: ${NEW_SIZE} sectors (reserving ${RESERVE_SECTORS} sectors / ~100MB)"
+echo "[INFO] New size for ${TARGET_LABEL}: ${NEW_SIZE} sectors (reserving ${RESERVE_SECTORS} sectors / ~100MB, ceiling ${GROWTH_CEILING})"
 echo ",${NEW_SIZE}" | sfdisk --no-reread --no-tell-kernel -N "${PART_NUM}" "${DEVICE_ROOT}"
 sfdisk -V "${DEVICE_ROOT}"
 
