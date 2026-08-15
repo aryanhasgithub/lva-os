@@ -11,7 +11,7 @@ set -e
 # Paths
 SUPERVISOR_DATA=/mnt/data/lva-supervisor
 PORTAL_DATA=/mnt/data/lva-portal
-SUPERVISOR_STARTUP_MARKER="/run/lva/startup-marker"
+SUPERVISOR_STARTUP_MARKER="${SUPERVISOR_DATA}/supervisor-started"
 SUPERVISOR_CIDFILE="${SUPERVISOR_DATA}/lva-supervisor.cid"
 SUPERVISOR_STARTSCRIPT_VERSION="/mnt/data/.lva-supervisor-version"
 SUPERVISOR_IMAGE="ghcr.io/aryanhasgithub/lva-supervisor"
@@ -42,12 +42,13 @@ if [ -f "${SUPERVISOR_STARTUP_MARKER}" ]; then
     SUPERVISOR_IMAGE_ID=""
 fi
 
-mkdir -p "$(dirname ${SUPERVISOR_STARTUP_MARKER})"
-touch ${SUPERVISOR_STARTUP_MARKER}
+# SUPERVISOR_DATA is already created above, so this directory always
+# exists — kept for safety in case that ordering ever changes.
+mkdir -p "$(dirname "${SUPERVISOR_STARTUP_MARKER}")"
+touch "${SUPERVISOR_STARTUP_MARKER}"
 
 # If supervisor image is missing, pull it
 if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
-    # FIXED: Check if file exists before running jq to always prevent the file-not-found crash log
     SUPERVISOR_VERSION="latest"
 
     if [ "${SUPERVISOR_VERSION}" = "latest" ]; then

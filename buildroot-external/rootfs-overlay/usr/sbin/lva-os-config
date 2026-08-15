@@ -1,0 +1,163 @@
+#!/bin/sh
+BOOT_CONFIG="/mnt/boot/CONFIG"
+USB_CONFIG="/mnt/config"
+CONFIG_DIR=""
+USE_USB=0
+
+# Check and mount usb CONFIG to folder
+if findfs LABEL="CONFIG" > /dev/null 2>&1; then
+    echo "[Info] Attempting to import CONFIG from USB stick"
+    systemctl start mnt-config.mount
+    if ! systemctl -q is-active mnt-config.mount; then
+        echo "[Error] Can't mount config partition"
+        exit 1
+    fi
+    USE_USB=1
+    CONFIG_DIR=${USB_CONFIG}
+fi
+
+# Use boot CONFIG folder
+if [ ${USE_USB} = 0 ] && [ -d ${BOOT_CONFIG} ]; then
+    echo "[Info] Attempting to import CONFIG from boot partition"
+    CONFIG_DIR=${BOOT_CONFIG}
+elif [ ${USE_USB} = 0 ]; then
+    echo "[Info] No config partition found — nothing to import"
+    exit 0
+fi
+echo "[Info] Imported CONFIG successfully"
+
+# mnt-config.mount is read-only — content removal for the "consume once"
+# sections below happens against the underlying block device after unmount,
+# not against the live ro mountpoint. See cleanup at the bottom.
+
+##
+# WiFi regulatory domain
+# Kernel-level setting (channel/power limits), not part of the NM keyfile —
+# consumed once, same lifecycle as network/.
+if [ -f "${CONFIG_DIR}/wifi-country" ]; then
+    CC=$(cat "${CONFIG_DIR}/wifi-country" | tr -d '[:space:]')
+    if [ -n "${CC}" ]; then
+        echo "[Info] Setting WiFi regulatory domain: ${CC}"
+        if iw reg set "${CC}" 2>/dev/null; then
+            CONSUMED_WIFI_COUNTRY=1
+        else
+            echo "[Warning] Invalid WiFi country code '${CC}' — skipping"
+        fi
+    fi
+fi
+
+##
+# NetworkManager
+# Consumed once: this only seeds the *initial* connection at first boot.
+# Once imported, the network/ directory is wiped from CONFIG so this never
+# re-runs and never clobbers WiFi changes made later via lva-cli/D-Bus.
+if [ -d "${CONFIG_DIR}/network" ]; then
+    echo "[Info] Importing initial NetworkManager connections from CONFIG"
+    rm -rf /etc/NetworkManager/system-connections/*
+    cp -f ${CONFIG_DIR}/network/* /etc/NetworkManager/system-connections/
+    chmod 600 /etc/NetworkManager/system-connections/*
+    nmcli con reload > /dev/null 2>&1
+    CONSUMED_NETWORK=1
+fi
+
+##
+# Modules
+if [ -d "${CONFIG_DIR}/modules" ]; then
+    echo "[Info] Update Modules autoload!"
+    rm -rf /etc/modules-load.d/*
+    cp -f ${CONFIG_DIR}/modules/* /etc/modules-load.d/
+fi
+
+##
+# Modules configuration
+if [ -d "${CONFIG_DIR}/modprobe" ]; then
+    echo "[Info] Update Modules configuration!"
+    rm -rf /etc/modprobe.d/*
+    cp -f ${CONFIG_DIR}/modprobe/* /etc/modprobe.d/
+fi
+
+##
+# Udev
+if [ -d "${CONFIG_DIR}/udev" ]; then
+    echo "[Info] Update Udev configuration!"
+    rm -rf /etc/udev/rules.d/*
+    cp -f ${CONFIG_DIR}/udev/* /etc/udev/rules.d/
+fi
+
+##
+# SSH known hosts
+# Intentionally NOT consumed-once: re-syncing every boot is the desired
+# behavior here, so a stick can be plugged back in later to grant/revoke
+# debug SSH access without needing a reflash.
+if [ -f "${CONFIG_DIR}/authorized_keys" ]; then
+    echo "[Info] Update SSH authorized_keys!"
+    cp -f ${CONFIG_DIR}/authorized_keys /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    systemctl start dropbear > /dev/null 2>&1
+else
+    echo "[Info] Stop SSH debug access"
+    rm -f /root/.ssh/authorized_keys
+    systemctl stop dropbear > /dev/null 2>&1
+fi
+
+##
+# Timezone
+# Consumed once, same as network — seeds the initial timezone at first boot.
+# Runtime changes via lva-cli/timedatectl persist to /mnt/overlay/etc/localtime
+# (see systemd-timedated.service.d/localtime.conf) and must not be reverted
+# by a later boot re-applying CONFIG.
+if [ -f "${CONFIG_DIR}/timezone" ]; then
+    TZ_VALUE=$(cat "${CONFIG_DIR}/timezone" | tr -d '[:space:]')
+    if [ -n "${TZ_VALUE}" ]; then
+        echo "[Info] Setting initial timezone: ${TZ_VALUE}"
+        if timedatectl set-timezone "${TZ_VALUE}" 2>/dev/null; then
+            CONSUMED_TIMEZONE=1
+        else
+            echo "[Warning] Invalid timezone '${TZ_VALUE}' — skipping"
+        fi
+    fi
+fi
+
+##
+# Firmware update / Only USB
+UPTIME=$(awk '{printf "%0.f", $1}' /proc/uptime)
+if ls ${USB_CONFIG}/*.raucb > /dev/null 2>&1 && [ "${UPTIME}" -ge "300" ]; then
+    echo "[Info] Performing a firmware update"
+    # shellcheck disable=SC2012
+    rauc_filename=$(ls ${USB_CONFIG}/*.raucb | head -n 1)
+    if rauc install "${rauc_filename}"; then
+        echo "[Info] Firmware update success"
+        systemctl reboot
+    else
+        echo "[Error] Firmware update failed"
+    fi
+fi
+
+##
+# Consume-once cleanup
+# Network config and timezone are wiped from the CONFIG partition itself
+# after a successful import, so these blocks structurally cannot run again
+# on a later boot — no marker file needed, no risk of forgetting to check
+# one, and no risk of reverting changes made later via lva-cli.
+if [ "${CONSUMED_NETWORK}" = "1" ] || [ "${CONSUMED_TIMEZONE}" = "1" ] || [ "${CONSUMED_WIFI_COUNTRY}" = "1" ]; then
+    if [ ${USE_USB} = 1 ]; then
+        # mnt-config.mount is ro=, remount rw briefly to clear consumed items
+        mount -o remount,rw ${USB_CONFIG} 2>/dev/null
+        [ "${CONSUMED_NETWORK}" = "1" ] && rm -rf "${USB_CONFIG}/network"
+        [ "${CONSUMED_TIMEZONE}" = "1" ] && rm -f "${USB_CONFIG}/timezone"
+        [ "${CONSUMED_WIFI_COUNTRY}" = "1" ] && rm -f "${USB_CONFIG}/wifi-country"
+        mount -o remount,ro ${USB_CONFIG} 2>/dev/null
+    else
+        [ "${CONSUMED_NETWORK}" = "1" ] && rm -rf "${BOOT_CONFIG}/network"
+        [ "${CONSUMED_TIMEZONE}" = "1" ] && rm -f "${BOOT_CONFIG}/timezone"
+        [ "${CONSUMED_WIFI_COUNTRY}" = "1" ] && rm -f "${BOOT_CONFIG}/wifi-country"
+    fi
+    echo "[Info] Consumed config cleared from CONFIG partition"
+fi
+
+# Cleanup config partition mount
+if [ ${USE_USB} = 1 ]; then
+    systemctl stop mnt-config.mount
+else
+    rm -rf ${BOOT_CONFIG}
+fi
