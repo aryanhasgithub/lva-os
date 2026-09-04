@@ -26,10 +26,8 @@ Lva-os(lva-os) uses Docker as its container engine. By default it deploys the LV
 | Generic AArch64 | AArch64 |
 
 ## Getting Started
-
-Download the latest release image for your board from the [Releases](../../releases) page, flash it to your SD card or storage device, and boot. On first boot, lva-os will pull the required containers and set up the system automatically. Progress is visible on port `8080` during this process.
-
-Once setup is complete, the LVA Portal is accessible on port `8000`.
+It is recommended to use [lva-installer](https://github.com/aryanhasgithub/lva-installer), which packages the image flasher+downloading steps and allows for injecting WIFI credentials before first-boot in case you do not use ethernet.
+Additional instructions for using the os are available at [getting_started.md](docs/getting_started.md).
 
 ## Components
 
