@@ -7,7 +7,7 @@ if [ -f /mnt/data/lva-portal/master.env ]; then
     ARGS=()
     while IFS='=' read -r key value; do
         [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
-        
+
         # Strip quotes from values
         stripped="${value%\"}"
         stripped="${stripped#\"}"
@@ -15,20 +15,24 @@ if [ -f /mnt/data/lva-portal/master.env ]; then
         stripped="${stripped#\'}"
         value="$stripped"
 
-        # 1. Convert underscores to dashes for Python CLI format
-        cli_key=$(echo "${key,,}" | tr '_' '-')
-
-        # 2. Handle Boolean Flags (Flags that don't take a value)
-        if [[ "$cli_key" == "enable-debug" || "$cli_key" == "debug" ]]; then
-            [[ "$value" == "1" || "$value" == "true" ]] && ARGS+=("--debug")
-        elif [[ "$cli_key" == "enable-output-only" || "$cli_key" == "output-only" ]]; then
-            [[ "$value" == "1" || "$value" == "true" ]] && ARGS+=("--output-only")
-        elif [[ "$cli_key" == "enable-thinking-sound" ]]; then
-            [[ "$value" == "1" || "$value" == "true" ]] && ARGS+=("--enable-thinking-sound")
-        else
-            # Standard key-value pairs
-            ARGS+=("--$cli_key" "$value")
+        # Boolean/flag fields are written with a "B_" prefix on the env var
+        # name (added at config-save time, see config.py's _env_key()).
+        # These are zero-argument switches in the LVA CLI, so we emit the
+        # bare flag with no trailing value when true, and omit it entirely
+        # when false. Detecting this purely from the "B_" prefix means no
+        # per-key allowlist needs to be kept in sync with the schema here.
+        if [[ "$key" == B_* ]]; then
+            bool_key="${key#B_}"
+            cli_key=$(echo "${bool_key,,}" | tr '_' '-')
+            if [[ "$value" == "1" || "$value" == "true" ]]; then
+                ARGS+=("--$cli_key")
+            fi
+            continue
         fi
+
+        # Standard key-value pairs
+        cli_key=$(echo "${key,,}" | tr '_' '-')
+        ARGS+=("--$cli_key" "$value")
     done < /mnt/data/lva-portal/master.env
 else
     echo "[lva-entrypoint] WARNING: /mnt/data/lva-portal/master.env not found, using env variables"
