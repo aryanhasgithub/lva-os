@@ -27,7 +27,7 @@ Lva-os(lva-os) uses Docker as its container engine. By default it deploys the LV
 
 ## Getting Started
 It is recommended to use [lva-installer](https://github.com/aryanhasgithub/lva-installer), which packages the image flasher+downloading steps and allows for injecting WIFI credentials before first-boot in case you do not use ethernet.
-Additional instructions for using the os are available at [getting_started.md](docs/getting_started.md).
+Additional instructions for using the os are available at [getting_started.md](Documentation/getting_started.md).
 
 ## Components
 
