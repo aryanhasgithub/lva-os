@@ -19,26 +19,22 @@ endif
 LVA_SUPERVISOR_CONTAINER_IMAGES_ARCH = lva-supervisor lva-cli lva-audio
 
 define LVA_SUPERVISOR_CONFIGURE_CMDS
-	curl -s $(LVA_SUPERVISOR_VERSION_URL) > $(@D)/version.json
+	curl -sf $(LVA_SUPERVISOR_VERSION_URL) > $(@D)/version.json
 endef
 
 define LVA_SUPERVISOR_BUILD_CMDS
 	mkdir -p $(@D)/images
 	mkdir -p $(LVA_SUPERVISOR_DL_DIR)
-
-	$(foreach image,$(LVA_SUPERVISOR_CONTAINER_IMAGES_ARCH),\
-		$(BR2_EXTERNAL_LVA_OS_PATH)/package/lva-supervisor/fetch-container-image.sh \
-			$(LVA_SUPERVISOR_OCI_ARCH) $(@D)/version.json $(image) "$(LVA_SUPERVISOR_DL_DIR)" "$(@D)/images"
-	)
+	$(foreach image,$(LVA_SUPERVISOR_CONTAINER_IMAGES_ARCH),$(BR2_EXTERNAL_LVA_OS_PATH)/package/lva-supervisor/fetch-container-image.sh $(LVA_SUPERVISOR_OCI_ARCH) $(@D)/version.json $(image) "$(LVA_SUPERVISOR_DL_DIR)" "$(@D)/images" &&) true
 endef
 
 LVA_SUPERVISOR_INSTALL_IMAGES = YES
 
 define LVA_SUPERVISOR_INSTALL_IMAGES_CMDS
-    $(BR2_EXTERNAL_LVA_OS_PATH)/package/lva-supervisor/create-data-partition.sh \
-	    	"$(@D)" \
-		    "$(BINARIES_DIR)" \
- 		    "$(DOCKER_ENGINE_VERSION)"
+	$(BR2_EXTERNAL_LVA_OS_PATH)/package/lva-supervisor/create-data-partition.sh \
+		"$(@D)" \
+		"$(BINARIES_DIR)" \
+		"$(DOCKER_ENGINE_VERSION)"
 endef
 
 $(eval $(generic-package))
