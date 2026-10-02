@@ -7,13 +7,9 @@ while ! docker version 2>/dev/null >/dev/null; do
 done
 
 echo "Loading LVA container stack..."
-for img in lva-supervisor lva-cli lva-audio; do
-    if [ -f "/build/images/${img}.tar" ]; then
-        echo "Loading ${img} image..."
-        docker load --input "/build/images/${img}.tar"
-    else
-        echo "Warning: /build/images/${img}.tar not found, skipping."
-    fi
+for image in $(ls -S /build/images/*.tar); do
+	docker load --input "${image}"
 done
 
-echo "Done loading images."
+supervisor=$(docker images --filter "label=io.lva.type=supervisor" --quiet)
+docker tag "${supervisor}" "ghcr.io/aryanhasgithub/lva-supervisor:latest"

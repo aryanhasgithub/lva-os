@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-APPARMOR_URL="https://raw.githubusercontent.com/aryanhasgithub/lva-version/refs/heads/main/apparmor.txt"
+APPARMOR_URL="https://aryanhasgithub.github.io/lva-version/apparmor.txt"
 PROFILES_DIR="/mnt/data/lva-supervisor/apparmor"
 CACHE_DIR="${PROFILES_DIR}/cache"
 

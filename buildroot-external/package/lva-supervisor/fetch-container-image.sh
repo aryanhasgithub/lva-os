@@ -3,15 +3,11 @@ set -e
 set -u
 set -o pipefail
 
-# Argument mapping
-version=$1
-oci_arch=$2
-dl_dir=$3
-dst_dir=$4
-image_name=$5 # Accept image name parameter (e.g., lva-supervisor, lva-cli, lva-audio)
-
-image="ghcr.io/aryanhasgithub/${image_name}"
-full_image_name="${image}:${version}"
+oci_arch=$1
+version_json=$2
+image_json_name=$3
+dl_dir=$4
+dst_dir=$5
 
 retry() {
     local retries="$1"
@@ -31,11 +27,16 @@ retry() {
     return $rc
 }
 
+image="ghcr.io/aryanhasgithub/${image_json_name}"
+image_tag=$(jq -e -r --arg image_json_name "${image_json_name}" \
+	'.[$image_json_name].version' < "${version_json}")
+full_image_name="${image}:${image_tag}"
+
 image_digest=$(retry 3 "skopeo inspect --override-arch '${oci_arch}' 'docker://${full_image_name}' | jq -r '.Digest'")
 
 image_file_name="${full_image_name//[:\/]/_}@${image_digest//[:\/]/_}"
 image_file_path="${dl_dir}/${image_file_name}.tar"
-dst_image_file_path="${dst_dir}/${image_name}.tar"
+dst_image_file_path="${dst_dir}/${image_file_name}.tar"
 
 (
     flock --verbose 3

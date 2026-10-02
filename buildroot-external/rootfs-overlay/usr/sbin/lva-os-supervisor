@@ -52,7 +52,7 @@ if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
     SUPERVISOR_VERSION="latest"
 
     if [ "${SUPERVISOR_VERSION}" = "latest" ]; then
-        SUPERVISOR_VERSION="$(curl -s --location https://raw.githubusercontent.com/aryanhasgithub/lva-version/main/stable.json | jq -e -r '.["lva-supervisor"].version' || echo "latest")"
+        SUPERVISOR_VERSION="$(curl -s --location https://aryanhasgithub.github.io/lva-version/stable.json | jq -e -r '.["lva-supervisor"].version' || echo "latest")"
     fi
 
     echo "[WARNING] Supervisor image missing, downloading: ${SUPERVISOR_VERSION}"
