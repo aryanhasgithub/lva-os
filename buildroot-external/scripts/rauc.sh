@@ -40,7 +40,7 @@ function install_rauc_certs() {
 
 function install_bootloader_config() {
     if [ "${BOOTLOADER}" == "uboot" ]; then
-        echo -e "/dev/disk/by-partlabel/lva-os-bootstate\t0x0000\t${BOOT_ENV_SIZE}" \
+        echo -e "/dev/disk/by-partlabel/lvaos-bootstate\t0x0000\t${BOOT_ENV_SIZE}" \
             > "${TARGET_DIR}/etc/fw_env.config"
     fi
 
