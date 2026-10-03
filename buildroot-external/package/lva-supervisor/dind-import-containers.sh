@@ -1,4 +1,4 @@
-#!/usr/sh
+#!/bin/sh
 set -e
 
 echo "Waiting for Docker daemon..."
@@ -7,9 +7,12 @@ while ! docker version 2>/dev/null >/dev/null; do
 done
 
 echo "Loading LVA container stack..."
-for image in $(ls -S /build/images/*.tar); do
-	docker load --input "${image}"
+for image in /build/images/*.tar; do
+    docker load --input "${image}"
 done
 
-supervisor=$(docker images --filter "label=io.lva.type=supervisor" --quiet)
-docker tag "${supervisor}" "ghcr.io/aryanhasgithub/lva-supervisor:latest"
+for repo in lva-supervisor lva-cli lva-audio; do
+    full="ghcr.io/aryanhasgithub/${repo}"
+    tag=$(docker images --format '{{.Repository}}:{{.Tag}}' "${full}" | head -n1)
+    docker tag "${tag}" "${full}:latest"
+done
