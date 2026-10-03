@@ -6,7 +6,7 @@ RefuseManualStop=true
 
 [Service]
 Type=oneshot
-ExecStart=/usr/libexec/lvaos-persists
+ExecStart=/usr/libexec/lva-os-persists
 RemainAfterExit=true
 
 [Install]
