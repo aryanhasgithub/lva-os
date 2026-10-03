@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/sh
 set -e
 
 echo "Waiting for Docker daemon..."
